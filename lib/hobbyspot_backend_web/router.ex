@@ -36,11 +36,13 @@ defmodule HobbyspotBackendWeb.Router do
 
     post "/users/register", UserAuthController, :register
     post "/users/log-in", UserAuthController, :login
+    get "/interests", InterestController, :index
 
     pipe_through :require_authenticated_api_user
 
     get "/users/me", UserAuthController, :me
     patch "/users/me/onboarding", UserAuthController, :update_onboarding
+    put "/users/me/interests", InterestController, :update_user_interests
     delete "/users/log-out", UserAuthController, :logout
   end
 

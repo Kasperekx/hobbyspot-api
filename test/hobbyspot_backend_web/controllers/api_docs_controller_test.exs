@@ -19,19 +19,36 @@ defmodule HobbyspotBackendWeb.ApiDocsControllerTest do
 
       assert Map.has_key?(paths, "/api/users/register")
       assert Map.has_key?(paths, "/api/users/log-in")
+      assert Map.has_key?(paths, "/api/interests")
       assert Map.has_key?(paths, "/api/users/me")
       assert Map.has_key?(paths, "/api/users/me/onboarding")
-      assert Map.has_key?(paths, "/api/users/me/location")
+      assert Map.has_key?(paths, "/api/users/me/interests")
       assert Map.has_key?(paths, "/api/users/log-out")
+      refute Map.has_key?(paths, "/api/users/me/location")
 
       assert schemas["User"]["properties"]["id"] == %{"type" => "string", "format" => "uuid"}
       assert schemas["Location"]["properties"]["id"] == %{"type" => "string", "format" => "uuid"}
 
-      assert schemas["LocationRequest"]["properties"]["location"]["properties"][
-               "search_radius_meters"
-             ]["default"] == 5000
+      assert schemas["OnboardingRequest"]["properties"]["onboarding"]["properties"]["location"][
+               "$ref"
+             ] == "#/components/schemas/LocationInput"
 
-      assert schemas["LocationRequest"]["properties"]["location"]["properties"]["source"][
+      assert schemas["OnboardingRequest"]["properties"]["onboarding"]["properties"]["interests"] ==
+               %{
+                 "type" => "array",
+                 "items" => %{"type" => "string"},
+                 "example" => ["dog_walks", "running"]
+               }
+
+      assert schemas["UpdateUserInterestsRequest"]["properties"]["interests"] == %{
+               "type" => "array",
+               "items" => %{"type" => "string"},
+               "example" => ["dog_walks", "running"]
+             }
+
+      assert schemas["LocationInput"]["properties"]["search_radius_meters"]["default"] == 5000
+
+      assert schemas["LocationInput"]["properties"]["source"][
                "enum"
              ] == ["manual", "gps"]
     end

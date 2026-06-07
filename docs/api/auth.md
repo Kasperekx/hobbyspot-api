@@ -22,23 +22,42 @@ The token is returned by registration and login. Store it in secure device
 storage, for example Keychain on iOS or Keystore-backed secure storage on
 Android. Do not store it in plain AsyncStorage or logs.
 
-## User object
+## Response shape
+
+Auth endpoints return account data separately from onboarding state:
 
 ```json
 {
-  "id": "95aa0a64-82d8-4118-ae75-603e28b399d9",
-  "email": "user@example.com",
-  "avatar_url": null,
-  "full_name": null,
-  "birth_date": null,
-  "confirmed_at": null,
-  "onboarding_completed": false
+  "data": {
+    "user": {
+      "id": "95aa0a64-82d8-4118-ae75-603e28b399d9",
+      "email": "user@example.com",
+      "confirmed_at": null
+    },
+    "onboarding": {
+      "profile": {
+        "avatar_url": null,
+        "full_name": null,
+        "birth_date": null
+      },
+      "location": null,
+      "interests": [],
+      "completed": false
+    }
+  }
 }
 ```
 
-`id` is a UUID string. `confirmed_at` is `null` until the account is confirmed
-through the web/email confirmation flow. `avatar_url`, `full_name`, and
-`birth_date` are `null` until the user fills them during onboarding.
+`user.id` is a UUID string. `confirmed_at` is `null` until the account is
+confirmed through the web/email confirmation flow.
+
+`onboarding.location` is the user's default discovery location. It is used as a
+fallback for event discovery when mobile does not provide a fresh device
+location.
+
+`onboarding.interests` contains the user's selected MVP hobbies. At least one
+interest is required to finish onboarding, but profile fields can stay empty and
+be updated later.
 
 ## Register
 
@@ -73,11 +92,17 @@ Success response: `201 Created`
     "user": {
       "id": "95aa0a64-82d8-4118-ae75-603e28b399d9",
       "email": "user@example.com",
-      "avatar_url": null,
-      "full_name": null,
-      "birth_date": null,
-      "confirmed_at": null,
-      "onboarding_completed": false
+      "confirmed_at": null
+    },
+    "onboarding": {
+      "profile": {
+        "avatar_url": null,
+        "full_name": null,
+        "birth_date": null
+      },
+      "location": null,
+      "interests": [],
+      "completed": false
     }
   }
 }
@@ -122,11 +147,17 @@ Success response: `200 OK`
     "user": {
       "id": "95aa0a64-82d8-4118-ae75-603e28b399d9",
       "email": "user@example.com",
-      "avatar_url": null,
-      "full_name": null,
-      "birth_date": null,
-      "confirmed_at": null,
-      "onboarding_completed": false
+      "confirmed_at": null
+    },
+    "onboarding": {
+      "profile": {
+        "avatar_url": null,
+        "full_name": null,
+        "birth_date": null
+      },
+      "location": null,
+      "interests": [],
+      "completed": false
     }
   }
 }
@@ -144,7 +175,8 @@ Invalid credentials response: `401 Unauthorized`
 
 ## Current User
 
-Returns the currently authenticated user for a valid bearer token.
+Returns the currently authenticated user and onboarding state for a valid bearer
+token.
 
 ```http
 GET /api/users/me
@@ -159,11 +191,38 @@ Success response: `200 OK`
     "user": {
       "id": "95aa0a64-82d8-4118-ae75-603e28b399d9",
       "email": "user@example.com",
-      "avatar_url": null,
-      "full_name": null,
-      "birth_date": null,
-      "confirmed_at": null,
-      "onboarding_completed": false
+      "confirmed_at": null
+    },
+    "onboarding": {
+      "profile": {
+        "avatar_url": "https://example.com/avatar.png",
+        "full_name": "Ada Lovelace",
+        "birth_date": "1994-04-12"
+      },
+      "location": {
+        "latitude": 52.2297,
+        "longitude": 21.0122,
+        "city": "Warszawa",
+        "country_code": "PL",
+        "label": "Warszawa",
+        "search_radius_meters": 5000,
+        "source": "manual"
+      },
+      "interests": [
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "slug": "dog_walks",
+          "name": "Psy i spacery",
+          "notifications_enabled": true
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "slug": "running",
+          "name": "Bieganie",
+          "notifications_enabled": true
+        }
+      ],
+      "completed": true
     }
   }
 }
@@ -179,10 +238,10 @@ Missing or invalid token response: `401 Unauthorized`
 }
 ```
 
-## Complete Onboarding
+## Update Onboarding
 
-Saves profile fields collected during onboarding and marks onboarding as
-completed.
+Saves profile fields, default discovery location, selected interests, and
+completion state collected during onboarding.
 
 ```http
 PATCH /api/users/me/onboarding
@@ -193,15 +252,50 @@ Request body:
 
 ```json
 {
-  "user": {
-    "avatar_url": "https://example.com/avatar.png",
-    "full_name": "Ada Lovelace",
-    "birth_date": "1994-04-12"
+  "onboarding": {
+    "profile": {
+      "avatar_url": "https://example.com/avatar.png",
+      "full_name": "Ada Lovelace",
+      "birth_date": "1994-04-12"
+    },
+    "location": {
+      "latitude": 52.2297,
+      "longitude": 21.0122,
+      "city": "Warszawa",
+      "country_code": "PL",
+      "label": "Warszawa",
+      "search_radius_meters": 5000,
+      "source": "manual"
+    },
+    "interests": ["dog_walks", "running"],
+    "completed": true
   }
 }
 ```
 
+Partial updates are supported. Mobile can send only `profile`, only `location`,
+only `interests`, only `completed`, or all of them together. The final onboarding
+submit should send one request with location, interests, and `completed: true`.
+The backend saves the update in a single database transaction.
+
 `birth_date` must use ISO date format: `YYYY-MM-DD`.
+
+When `completed` is `true`, the backend requires:
+
+- saved `location`
+- at least one selected interest
+
+Profile fields are optional and can be updated later.
+
+Location field rules:
+
+- `latitude` is required when `location` is sent and must be between `-90` and `90`.
+- `longitude` is required when `location` is sent and must be between `-180` and `180`.
+- `search_radius_meters` is required when `location` is sent and must be between `100` and `100000`.
+- `source` is required when `location` is sent and must be either `manual` or `gps`.
+- `city` is optional, max `160` characters.
+- `country_code` is optional, exactly `2` characters when present.
+- `label` is optional, max `160` characters.
 
 Success response: `200 OK`
 
@@ -211,11 +305,38 @@ Success response: `200 OK`
     "user": {
       "id": "95aa0a64-82d8-4118-ae75-603e28b399d9",
       "email": "user@example.com",
-      "avatar_url": "https://example.com/avatar.png",
-      "full_name": "Ada Lovelace",
-      "birth_date": "1994-04-12",
-      "confirmed_at": null,
-      "onboarding_completed": true
+      "confirmed_at": null
+    },
+    "onboarding": {
+      "profile": {
+        "avatar_url": "https://example.com/avatar.png",
+        "full_name": "Ada Lovelace",
+        "birth_date": "1994-04-12"
+      },
+      "location": {
+        "latitude": 52.2297,
+        "longitude": 21.0122,
+        "city": "Warszawa",
+        "country_code": "PL",
+        "label": "Warszawa",
+        "search_radius_meters": 5000,
+        "source": "manual"
+      },
+      "interests": [
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "slug": "dog_walks",
+          "name": "Psy i spacery",
+          "notifications_enabled": true
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "slug": "running",
+          "name": "Bieganie",
+          "notifications_enabled": true
+        }
+      ],
+      "completed": true
     }
   }
 }
@@ -226,7 +347,9 @@ Validation error response: `422 Unprocessable Entity`
 ```json
 {
   "errors": {
-    "birth_date": ["is invalid"]
+    "birth_date": ["is invalid"],
+    "latitude": ["must be less than or equal to 90"],
+    "interests": ["is required"]
   }
 }
 ```
@@ -247,17 +370,19 @@ requests using that token will return `401 Unauthorized`.
 
 ## Recommended mobile flow
 
-1. On registration or login, read `data.token` and `data.user`.
+1. On registration or login, read `data.token`, `data.user`, and `data.onboarding`.
 2. Store `data.token` in secure device storage.
-3. Keep `data.user` in app state for the current session.
+3. Keep `data.user` and `data.onboarding` in app state for the current session.
 4. Add `Authorization: Bearer <token>` to authenticated requests.
 5. On app launch, load the stored token and call `GET /api/users/me`.
 6. If `/me` returns `200`, restore the signed-in session.
-7. If `data.user.onboarding_completed` is `false`, show the onboarding flow.
-8. During the location step, use the [Mobile location API](location.md).
-9. When profile onboarding is complete, call `PATCH /api/users/me/onboarding`.
-10. If `/me` returns `401`, delete the stored token and show the login screen.
-11. On logout, call `DELETE /api/users/log-out`, then delete the stored token.
+7. If `data.onboarding.completed` is `false`, show the onboarding flow.
+8. Load available hobbies with `GET /api/interests`.
+9. During the location step, use GPS permission or manual city selection.
+10. Keep profile, location, and interests in local mobile state during onboarding.
+11. Finish onboarding with one `PATCH /api/users/me/onboarding` request.
+12. If `/me` returns `401`, delete the stored token and show the login screen.
+13. On logout, call `DELETE /api/users/log-out`, then delete the stored token.
 
 ## cURL examples
 
@@ -284,13 +409,13 @@ curl -i http://localhost:4000/api/users/me \
   -H "authorization: Bearer $HOBBYSPOT_AUTH_TOKEN"
 ```
 
-Complete onboarding:
+Update onboarding:
 
 ```bash
 curl -i -X PATCH http://localhost:4000/api/users/me/onboarding \
   -H "authorization: Bearer $HOBBYSPOT_AUTH_TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"user":{"avatar_url":"https://example.com/avatar.png","full_name":"Ada Lovelace","birth_date":"1994-04-12"}}'
+  -d '{"onboarding":{"profile":{"avatar_url":"https://example.com/avatar.png","full_name":"Ada Lovelace","birth_date":"1994-04-12"},"location":{"latitude":52.2297,"longitude":21.0122,"city":"Warszawa","country_code":"PL","label":"Warszawa","search_radius_meters":5000,"source":"manual"},"interests":["dog_walks","running"],"completed":true}}'
 ```
 
 Log out:

@@ -16,6 +16,7 @@ defmodule HobbyspotBackend.Accounts.User do
     field :authenticated_at, :utc_datetime, virtual: true
 
     has_one :location, HobbyspotBackend.Accounts.UserLocation
+    has_many :user_interests, HobbyspotBackend.Accounts.UserInterest
 
     timestamps(type: :utc_datetime)
   end
@@ -49,12 +50,23 @@ defmodule HobbyspotBackend.Accounts.User do
   @doc """
   A user changeset for completing mobile onboarding.
   """
-  def onboarding_changeset(user, attrs) do
+  def onboarding_changeset(user, attrs, completed \\ true) do
+    attrs =
+      attrs
+      |> stringify_keys()
+      |> Map.put("onboarding_completed", completed)
+
     user
-    |> cast(attrs, [:avatar_url, :full_name, :birth_date])
+    |> cast(attrs, [:avatar_url, :full_name, :birth_date, :onboarding_completed])
     |> validate_length(:avatar_url, max: 2048)
     |> validate_length(:full_name, max: 160)
-    |> put_change(:onboarding_completed, true)
+  end
+
+  defp stringify_keys(attrs) when is_map(attrs) do
+    Map.new(attrs, fn
+      {key, value} when is_atom(key) -> {Atom.to_string(key), value}
+      {key, value} -> {key, value}
+    end)
   end
 
   defp validate_email(changeset, opts) do

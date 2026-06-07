@@ -59,6 +59,7 @@ mix precommit
 * OpenAPI JSON: http://localhost:4000/api/openapi.json
 * [Mobile auth API](docs/api/auth.md)
 * [Mobile location API](docs/api/location.md)
+* [Mobile interests API](docs/api/interests.md)
 
 Ready to run in production? Please [check our deployment guides](https://hexdocs.pm/phoenix/deployment.html).
 

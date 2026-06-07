@@ -18,9 +18,9 @@ config :hobbyspot_backend, HobbyspotBackend.Repo,
 # watchers to your application. For example, we can use it
 # to bundle .js and .css sources.
 config :hobbyspot_backend, HobbyspotBackendWeb.Endpoint,
-  # Binding to loopback ipv4 address prevents access from other machines.
-  # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}],
+  # Bind to all interfaces (0.0.0.0) so the backend is reachable from other
+  # machines/devices on the network, not just localhost.
+  http: [ip: {0, 0, 0, 0}, port: 4000],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,

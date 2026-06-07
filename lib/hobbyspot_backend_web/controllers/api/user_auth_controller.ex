@@ -2,6 +2,7 @@ defmodule HobbyspotBackendWeb.Api.UserAuthController do
   use HobbyspotBackendWeb, :controller
 
   alias HobbyspotBackend.Accounts
+  alias HobbyspotBackendWeb.Api.UserResponse
 
   def register(conn, %{"user" => user_params}) do
     case Accounts.register_user_with_password(user_params) do
@@ -10,7 +11,7 @@ defmodule HobbyspotBackendWeb.Api.UserAuthController do
 
         conn
         |> put_status(:created)
-        |> json(%{data: %{token: encode_token(token), user: user_json(user)}})
+        |> json(%{data: Map.put(UserResponse.user_data(user), :token, encode_token(token))})
 
       {:error, %Ecto.Changeset{} = changeset} ->
         conn
@@ -22,7 +23,7 @@ defmodule HobbyspotBackendWeb.Api.UserAuthController do
   def login(conn, %{"user" => %{"email" => email, "password" => password}}) do
     if user = Accounts.get_user_by_email_and_password(email, password) do
       token = Accounts.generate_user_session_token(user)
-      json(conn, %{data: %{token: encode_token(token), user: user_json(user)}})
+      json(conn, %{data: Map.put(UserResponse.user_data(user), :token, encode_token(token))})
     else
       invalid_credentials(conn)
     end
@@ -32,21 +33,27 @@ defmodule HobbyspotBackendWeb.Api.UserAuthController do
 
   def me(conn, _params) do
     user = conn.assigns.current_scope.user
-    json(conn, %{data: %{user: user_json(user)}})
+    json(conn, %{data: UserResponse.user_data(user)})
   end
 
-  def update_onboarding(conn, %{"user" => user_params}) do
+  def update_onboarding(conn, %{"onboarding" => onboarding_params}) do
     user = conn.assigns.current_scope.user
 
-    case Accounts.complete_user_onboarding(user, user_params) do
+    case Accounts.complete_user_onboarding(user, onboarding_params) do
       {:ok, user} ->
-        json(conn, %{data: %{user: user_json(user)}})
+        json(conn, %{data: UserResponse.user_data(user)})
 
       {:error, %Ecto.Changeset{} = changeset} ->
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{errors: errors_on(changeset)})
     end
+  end
+
+  def update_onboarding(conn, _params) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{errors: %{onboarding: ["can't be blank"]}})
   end
 
   def logout(conn, _params) do
@@ -61,18 +68,6 @@ defmodule HobbyspotBackendWeb.Api.UserAuthController do
     conn
     |> put_status(:unauthorized)
     |> json(%{errors: %{detail: "Invalid email or password"}})
-  end
-
-  defp user_json(user) do
-    %{
-      id: user.id,
-      email: user.email,
-      avatar_url: user.avatar_url,
-      full_name: user.full_name,
-      birth_date: user.birth_date,
-      confirmed_at: user.confirmed_at,
-      onboarding_completed: user.onboarding_completed
-    }
   end
 
   defp encode_token(token), do: Base.url_encode64(token, padding: false)

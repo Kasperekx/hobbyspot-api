@@ -1,40 +1,58 @@
-# Mobile Location API
+# Mobile Location Flow
 
-Status: planned endpoint contract. The `user_locations` table and PostGIS setup
-already exist; this document describes the API contract to implement next.
+Location is collected during onboarding through:
 
-Base URL for local development:
+```http
+PATCH /api/users/me/onboarding
+```
+
+There is no separate `/api/users/me/location` endpoint. The location sent during
+onboarding is stored as the user's default discovery location.
+
+## Purpose
+
+The default discovery location is not live tracking. It answers this product
+question:
 
 ```text
-http://localhost:4000
+If the app does not have a fresh device location, where should we show nearby events?
 ```
 
-All requests and responses use JSON. Send this header for request bodies:
+For real-time event discovery later, mobile should send fresh coordinates to the
+event search/feed endpoint. The backend can then use PostGIS to return events
+within the requested radius. If fresh coordinates are unavailable, the backend
+can fall back to the saved onboarding location.
 
-```http
-Content-Type: application/json
-```
+## Recommended onboarding UX
 
-Authenticated requests must include:
+1. Show a location step during onboarding.
+2. Explain that location is used to show nearby events.
+3. Offer two actions:
+   - `Use my current location`
+   - `Choose manually`
+4. If the user taps `Use my current location`, trigger the native iOS/Android
+   permission prompt.
+5. If permission is granted, read device coordinates and send `source: "gps"`.
+6. If permission is denied, show manual city/area search.
+7. If the user chooses manually, geocode the city/area and send `source: "manual"`.
+8. To complete onboarding, send location and selected interests in one
+   `PATCH /api/users/me/onboarding` request with `completed: true`.
 
-```http
-Authorization: Bearer <token>
-```
+Recommended product rule: location should be required to finish onboarding, but
+GPS permission should not be required. The user can always choose a city/area
+manually.
 
 ## Location object
 
 ```json
 {
-  "id": "c33bd41c-75f3-4a7e-a177-d338dc673f56",
   "latitude": 52.2297,
   "longitude": 21.0122,
   "city": "Warszawa",
   "country_code": "PL",
   "label": "Warszawa",
   "search_radius_meters": 5000,
-  "source": "manual",
-  "inserted_at": "2026-06-06T21:01:42Z",
-  "updated_at": "2026-06-06T21:01:42Z"
+  "source": "manual"
 }
 ```
 
@@ -42,37 +60,12 @@ The backend stores `latitude` and `longitude` as decimal values and derives a
 PostGIS `coordinates geography(Point, 4326)` value in the database. Mobile does
 not send or receive the generated `coordinates` field directly.
 
-## Update Current User Location
+## Field rules
 
-Creates or replaces the authenticated user's current location.
-
-```http
-PUT /api/users/me/location
-Authorization: Bearer <token>
-```
-
-Request body:
-
-```json
-{
-  "location": {
-    "latitude": 52.2297,
-    "longitude": 21.0122,
-    "city": "Warszawa",
-    "country_code": "PL",
-    "label": "Warszawa",
-    "search_radius_meters": 5000,
-    "source": "manual"
-  }
-}
-```
-
-Field rules:
-
-- `latitude` is required and must be between `-90` and `90`.
-- `longitude` is required and must be between `-180` and `180`.
-- `search_radius_meters` is required and must be between `100` and `100000`.
-- `source` is required and must be either `manual` or `gps`.
+- `latitude` is required when `location` is sent and must be between `-90` and `90`.
+- `longitude` is required when `location` is sent and must be between `-180` and `180`.
+- `search_radius_meters` is required when `location` is sent and must be between `100` and `100000`.
+- `source` is required when `location` is sent and must be either `manual` or `gps`.
 - `city` is optional, max `160` characters.
 - `country_code` is optional, exactly `2` characters when present.
 - `label` is optional, max `160` characters.
@@ -83,59 +76,110 @@ Recommended defaults:
 - `source`: `manual` when the user chooses a city/area manually
 - `source`: `gps` when the value comes from device location permission
 
-Success response: `200 OK`
+## GPS permission accepted
+
+Request:
 
 ```json
 {
-  "data": {
+  "onboarding": {
     "location": {
-      "id": "c33bd41c-75f3-4a7e-a177-d338dc673f56",
       "latitude": 52.2297,
       "longitude": 21.0122,
       "city": "Warszawa",
       "country_code": "PL",
       "label": "Warszawa",
       "search_radius_meters": 5000,
-      "source": "manual",
-      "inserted_at": "2026-06-06T21:01:42Z",
-      "updated_at": "2026-06-06T21:01:42Z"
+      "source": "gps"
     }
   }
 }
 ```
 
-Validation error response: `422 Unprocessable Entity`
+## Manual city selection
+
+Request:
 
 ```json
 {
-  "errors": {
-    "latitude": ["must be less than or equal to 90"],
-    "longitude": ["must be less than or equal to 180"],
-    "search_radius_meters": ["must be greater than or equal to 100"]
+  "onboarding": {
+    "location": {
+      "latitude": 52.2297,
+      "longitude": 21.0122,
+      "city": "Warszawa",
+      "country_code": "PL",
+      "label": "Warszawa",
+      "search_radius_meters": 5000,
+      "source": "manual"
+    }
   }
 }
 ```
 
-Missing or invalid token response: `401 Unauthorized`
+## Complete onboarding
+
+Mobile can send all onboarding data at the end of the flow:
 
 ```json
 {
-  "errors": {
-    "detail": "Unauthorized"
+  "onboarding": {
+    "profile": {
+      "avatar_url": "https://example.com/avatar.png",
+      "full_name": "Ada Lovelace",
+      "birth_date": "1994-04-12"
+    },
+    "location": {
+      "latitude": 52.2297,
+      "longitude": 21.0122,
+      "city": "Warszawa",
+      "country_code": "PL",
+      "label": "Warszawa",
+      "search_radius_meters": 5000,
+      "source": "manual"
+    },
+    "interests": ["dog_walks", "running"],
+    "completed": true
   }
 }
 ```
 
-## Recommended mobile onboarding flow
+Success response returns the updated `data.onboarding` object:
 
-1. Ask the user for location permission or let them choose a city/area manually.
-2. Convert the selected place into `latitude`, `longitude`, and display fields.
-3. Call `PUT /api/users/me/location`.
-4. Store the returned `data.location` in app state.
-5. Continue to the next onboarding step.
-
-If the user skips location, mobile should not call this endpoint. The backend can
-continue returning `null` or no location until the user provides one.
+```json
+{
+  "data": {
+    "onboarding": {
+      "profile": {
+        "avatar_url": "https://example.com/avatar.png",
+        "full_name": "Ada Lovelace",
+        "birth_date": "1994-04-12"
+      },
+      "location": {
+        "latitude": 52.2297,
+        "longitude": 21.0122,
+        "city": "Warszawa",
+        "country_code": "PL",
+        "label": "Warszawa",
+        "search_radius_meters": 5000,
+        "source": "manual"
+      },
+      "interests": [
+        {
+          "slug": "dog_walks",
+          "name": "Psy i spacery",
+          "notifications_enabled": true
+        },
+        {
+          "slug": "running",
+          "name": "Bieganie",
+          "notifications_enabled": true
+        }
+      ],
+      "completed": true
+    }
+  }
+}
+```
 
 ## Privacy notes
 
@@ -146,8 +190,8 @@ prefer approximate labels such as city, district, or area name.
 ## cURL example
 
 ```bash
-curl -i -X PUT http://localhost:4000/api/users/me/location \
+curl -i -X PATCH http://localhost:4000/api/users/me/onboarding \
   -H "authorization: Bearer $HOBBYSPOT_AUTH_TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"location":{"latitude":52.2297,"longitude":21.0122,"city":"Warszawa","country_code":"PL","label":"Warszawa","search_radius_meters":5000,"source":"manual"}}'
+  -d '{"onboarding":{"location":{"latitude":52.2297,"longitude":21.0122,"city":"Warszawa","country_code":"PL","label":"Warszawa","search_radius_meters":5000,"source":"manual"},"interests":["dog_walks"],"completed":true}}'
 ```

@@ -23,7 +23,11 @@ defmodule HobbyspotBackendWeb.OpenApiSpec do
       "tags" => [
         %{"name" => "Auth", "description" => "Registration, login and current user session"},
         %{"name" => "Onboarding", "description" => "User profile and onboarding data"},
-        %{"name" => "Location", "description" => "Planned user location endpoint contract"}
+        %{"name" => "Interests", "description" => "MVP hobby catalog and user selections"},
+        %{
+          "name" => "Location",
+          "description" => "Default discovery location collected during onboarding"
+        }
       ],
       "paths" => paths(),
       "components" => components()
@@ -65,12 +69,21 @@ defmodule HobbyspotBackendWeb.OpenApiSpec do
           }
         }
       },
+      "/api/interests" => %{
+        "get" => %{
+          "tags" => ["Interests"],
+          "summary" => "List active interests",
+          "responses" => %{
+            "200" => json_response("InterestsResponse", "Active interest catalog")
+          }
+        }
+      },
       "/api/users/me/onboarding" => %{
         "patch" => %{
           "tags" => ["Onboarding"],
-          "summary" => "Update onboarding profile fields",
+          "summary" => "Update onboarding state",
           "description" =>
-            "Updates profile fields collected during onboarding and marks onboarding_completed as true.",
+            "Updates onboarding profile fields, default discovery location, and completion state. Location can come from GPS permission or manual city selection.",
           "security" => bearer_security(),
           "requestBody" => json_request("OnboardingRequest"),
           "responses" => %{
@@ -80,20 +93,19 @@ defmodule HobbyspotBackendWeb.OpenApiSpec do
           }
         }
       },
-      "/api/users/me/location" => %{
+      "/api/users/me/interests" => %{
         "put" => %{
-          "tags" => ["Location"],
-          "summary" => "Upsert onboarding location",
+          "tags" => ["Interests"],
+          "summary" => "Replace current user interests",
           "description" =>
-            "Planned endpoint contract for the onboarding location step. The database schema already supports storing one location per user.",
+            "Replaces the user's selected interests. Onboarding can also submit interests in PATCH /api/users/me/onboarding.",
           "security" => bearer_security(),
-          "requestBody" => json_request("LocationRequest"),
+          "requestBody" => json_request("UpdateUserInterestsRequest"),
           "responses" => %{
-            "200" => json_response("LocationResponse", "Location updated"),
+            "200" => json_response("CurrentUserResponse", "Updated user interests"),
             "401" => json_response("ErrorResponse", "Unauthorized"),
             "422" => json_response("ValidationError", "Validation failed")
-          },
-          "x-status" => "planned"
+          }
         }
       },
       "/api/users/log-out" => %{
@@ -150,48 +162,58 @@ defmodule HobbyspotBackendWeb.OpenApiSpec do
         },
         "OnboardingRequest" => %{
           "type" => "object",
-          "required" => ["user"],
+          "required" => ["onboarding"],
           "properties" => %{
-            "user" => %{
+            "onboarding" => %{
               "type" => "object",
               "properties" => %{
-                "avatar_url" => nullable_string("uri"),
-                "full_name" => nullable_string(),
-                "birth_date" => %{
-                  "type" => "string",
-                  "format" => "date",
-                  "nullable" => true,
-                  "example" => "1994-04-12"
-                }
+                "profile" => schema_ref("ProfileInput"),
+                "location" => schema_ref("LocationInput"),
+                "interests" => interest_slugs_schema(),
+                "completed" => %{"type" => "boolean", "default" => false}
               }
             }
           }
         },
-        "LocationRequest" => %{
+        "UpdateUserInterestsRequest" => %{
           "type" => "object",
-          "required" => ["location"],
+          "required" => ["interests"],
           "properties" => %{
-            "location" => %{
-              "type" => "object",
-              "required" => ["latitude", "longitude"],
-              "properties" => %{
-                "latitude" => %{"type" => "number", "minimum" => -90, "maximum" => 90},
-                "longitude" => %{"type" => "number", "minimum" => -180, "maximum" => 180},
-                "city" => nullable_string(),
-                "country_code" => nullable_string(),
-                "label" => nullable_string(),
-                "search_radius_meters" => %{
-                  "type" => "integer",
-                  "minimum" => 100,
-                  "maximum" => 100_000,
-                  "default" => 5000
-                },
-                "source" => %{
-                  "type" => "string",
-                  "enum" => ["manual", "gps"],
-                  "default" => "manual"
-                }
-              }
+            "interests" => interest_slugs_schema()
+          }
+        },
+        "ProfileInput" => %{
+          "type" => "object",
+          "properties" => %{
+            "avatar_url" => nullable_string("uri"),
+            "full_name" => nullable_string(),
+            "birth_date" => %{
+              "type" => "string",
+              "format" => "date",
+              "nullable" => true,
+              "example" => "1994-04-12"
+            }
+          }
+        },
+        "LocationInput" => %{
+          "type" => "object",
+          "required" => ["latitude", "longitude"],
+          "properties" => %{
+            "latitude" => %{"type" => "number", "minimum" => -90, "maximum" => 90},
+            "longitude" => %{"type" => "number", "minimum" => -180, "maximum" => 180},
+            "city" => nullable_string(),
+            "country_code" => nullable_string(),
+            "label" => nullable_string(),
+            "search_radius_meters" => %{
+              "type" => "integer",
+              "minimum" => 100,
+              "maximum" => 100_000,
+              "default" => 5000
+            },
+            "source" => %{
+              "type" => "string",
+              "enum" => ["manual", "gps"],
+              "default" => "manual"
             }
           }
         },
@@ -202,7 +224,8 @@ defmodule HobbyspotBackendWeb.OpenApiSpec do
               "type" => "object",
               "properties" => %{
                 "token" => %{"type" => "string"},
-                "user" => schema_ref("User")
+                "user" => schema_ref("User"),
+                "onboarding" => schema_ref("Onboarding")
               }
             }
           }
@@ -213,19 +236,18 @@ defmodule HobbyspotBackendWeb.OpenApiSpec do
             "data" => %{
               "type" => "object",
               "properties" => %{
-                "user" => schema_ref("User")
+                "user" => schema_ref("User"),
+                "onboarding" => schema_ref("Onboarding")
               }
             }
           }
         },
-        "LocationResponse" => %{
+        "InterestsResponse" => %{
           "type" => "object",
           "properties" => %{
             "data" => %{
-              "type" => "object",
-              "properties" => %{
-                "location" => schema_ref("Location")
-              }
+              "type" => "array",
+              "items" => schema_ref("Interest")
             }
           }
         },
@@ -234,11 +256,30 @@ defmodule HobbyspotBackendWeb.OpenApiSpec do
           "properties" => %{
             "id" => %{"type" => "string", "format" => "uuid"},
             "email" => %{"type" => "string", "format" => "email"},
+            "confirmed_at" => %{"type" => "string", "format" => "date-time", "nullable" => true}
+          }
+        },
+        "Onboarding" => %{
+          "type" => "object",
+          "properties" => %{
+            "profile" => schema_ref("Profile"),
+            "location" => %{
+              "nullable" => true,
+              "allOf" => [schema_ref("Location")]
+            },
+            "interests" => %{
+              "type" => "array",
+              "items" => schema_ref("SelectedInterest")
+            },
+            "completed" => %{"type" => "boolean"}
+          }
+        },
+        "Profile" => %{
+          "type" => "object",
+          "properties" => %{
             "avatar_url" => nullable_string("uri"),
             "full_name" => nullable_string(),
-            "birth_date" => %{"type" => "string", "format" => "date", "nullable" => true},
-            "confirmed_at" => %{"type" => "string", "format" => "date-time", "nullable" => true},
-            "onboarding_completed" => %{"type" => "boolean"}
+            "birth_date" => %{"type" => "string", "format" => "date", "nullable" => true}
           }
         },
         "Location" => %{
@@ -252,6 +293,25 @@ defmodule HobbyspotBackendWeb.OpenApiSpec do
             "label" => nullable_string(),
             "search_radius_meters" => %{"type" => "integer"},
             "source" => %{"type" => "string"}
+          }
+        },
+        "Interest" => %{
+          "type" => "object",
+          "properties" => %{
+            "id" => %{"type" => "string", "format" => "uuid"},
+            "slug" => %{"type" => "string", "example" => "dog_walks"},
+            "name" => %{"type" => "string", "example" => "Psy i spacery"},
+            "description" => %{"type" => "string"},
+            "icon" => %{"type" => "string", "example" => "dog"}
+          }
+        },
+        "SelectedInterest" => %{
+          "type" => "object",
+          "properties" => %{
+            "id" => %{"type" => "string", "format" => "uuid"},
+            "slug" => %{"type" => "string", "example" => "dog_walks"},
+            "name" => %{"type" => "string", "example" => "Psy i spacery"},
+            "notifications_enabled" => %{"type" => "boolean"}
           }
         },
         "ErrorResponse" => %{
@@ -306,6 +366,14 @@ defmodule HobbyspotBackendWeb.OpenApiSpec do
   end
 
   defp schema_ref(name), do: %{"$ref" => "#/components/schemas/#{name}"}
+
+  defp interest_slugs_schema do
+    %{
+      "type" => "array",
+      "items" => %{"type" => "string"},
+      "example" => ["dog_walks", "running"]
+    }
+  end
 
   defp nullable_string(format \\ nil) do
     schema = %{"type" => "string", "nullable" => true}

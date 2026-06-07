@@ -6,7 +6,14 @@ defmodule HobbyspotBackend.Accounts do
   import Ecto.Query, warn: false
   alias HobbyspotBackend.Repo
 
-  alias HobbyspotBackend.Accounts.{User, UserToken, UserNotifier}
+  alias HobbyspotBackend.Accounts.{
+    Interest,
+    User,
+    UserInterest,
+    UserLocation,
+    UserToken,
+    UserNotifier
+  }
 
   ## Database getters
 
@@ -60,6 +67,18 @@ defmodule HobbyspotBackend.Accounts do
   """
   def get_user!(id), do: Repo.get!(User, id)
 
+  ## Interests
+
+  @doc """
+  Lists active interests available to mobile clients.
+  """
+  def list_interests do
+    Interest
+    |> where([interest], interest.is_active)
+    |> order_by([interest], asc: interest.position)
+    |> Repo.all()
+  end
+
   ## User registration
 
   @doc """
@@ -90,12 +109,170 @@ defmodule HobbyspotBackend.Accounts do
   end
 
   @doc """
-  Completes user onboarding by saving profile fields.
+  Saves onboarding profile fields and default discovery location.
   """
   def complete_user_onboarding(%User{} = user, attrs) do
+    attrs = stringify_keys(attrs)
+    profile_attrs = Map.get(attrs, "profile", %{})
+    location_attrs = Map.get(attrs, "location")
+    interest_slugs = Map.get(attrs, "interests")
+    completed = onboarding_completed_value(attrs, user)
+
+    Repo.transaction(fn ->
+      with {:ok, user} <- update_onboarding_profile(user, profile_attrs, completed),
+           {:ok, _location} <- upsert_onboarding_location(user, location_attrs),
+           {:ok, _interests} <- replace_user_interests_if_present(user, interest_slugs),
+           user <- preload_user_onboarding(user),
+           {:ok, user} <- validate_onboarding_completion(user, completed) do
+        user
+      else
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  @doc """
+  Replaces the user's selected interests.
+  """
+  def update_user_interests(%User{} = user, slugs) do
+    Repo.transaction(fn ->
+      with {:ok, _interests} <- replace_user_interests(user, slugs) do
+        preload_user_onboarding(user)
+      else
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  def preload_user_onboarding(%User{} = user) do
+    Repo.preload(user, [:location, user_interests: :interest], force: true)
+  end
+
+  def preload_user_location(%User{} = user), do: preload_user_onboarding(user)
+
+  defp onboarding_completed_value(attrs, user) do
+    if Map.has_key?(attrs, "completed") && !is_nil(Map.get(attrs, "completed")) do
+      Map.fetch!(attrs, "completed")
+    else
+      user.onboarding_completed
+    end
+  end
+
+  defp update_onboarding_profile(%User{} = user, profile_attrs, completed) do
     user
-    |> User.onboarding_changeset(attrs)
+    |> User.onboarding_changeset(profile_attrs, completed)
     |> Repo.update()
+  end
+
+  defp upsert_onboarding_location(_user, nil), do: {:ok, nil}
+
+  defp upsert_onboarding_location(%User{} = user, location_attrs) do
+    location = Repo.get_by(UserLocation, user_id: user.id) || %UserLocation{}
+
+    attrs =
+      location_attrs
+      |> stringify_keys()
+      |> Map.put("user_id", user.id)
+
+    location
+    |> UserLocation.changeset(attrs)
+    |> Repo.insert_or_update()
+  end
+
+  defp replace_user_interests_if_present(_user, nil), do: {:ok, nil}
+  defp replace_user_interests_if_present(user, slugs), do: replace_user_interests(user, slugs)
+
+  defp replace_user_interests(%User{} = user, slugs) do
+    with {:ok, interests} <- get_active_interests_by_slugs(slugs) do
+      now = DateTime.utc_now(:second)
+
+      Repo.delete_all(
+        from(user_interest in UserInterest, where: user_interest.user_id == ^user.id)
+      )
+
+      entries =
+        Enum.map(interests, fn interest ->
+          %{
+            id: Ecto.UUID.generate(),
+            user_id: user.id,
+            interest_id: interest.id,
+            notifications_enabled: true,
+            inserted_at: now,
+            updated_at: now
+          }
+        end)
+
+      Repo.insert_all(UserInterest, entries)
+
+      {:ok, interests}
+    end
+  end
+
+  defp get_active_interests_by_slugs(slugs) do
+    with {:ok, slugs} <- normalize_interest_slugs(slugs) do
+      interests =
+        Interest
+        |> where([interest], interest.is_active and interest.slug in ^slugs)
+        |> order_by([interest], asc: interest.position)
+        |> Repo.all()
+
+      found_slugs = MapSet.new(interests, & &1.slug)
+
+      if MapSet.size(found_slugs) == length(slugs) do
+        {:ok, interests}
+      else
+        {:error, changeset_error(:interests, "contains unknown interests")}
+      end
+    end
+  end
+
+  defp normalize_interest_slugs(slugs) when is_list(slugs) do
+    slugs =
+      slugs
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    if slugs == [] do
+      {:error, changeset_error(:interests, "select at least one interest")}
+    else
+      {:ok, slugs}
+    end
+  end
+
+  defp normalize_interest_slugs(_slugs) do
+    {:error, changeset_error(:interests, "must be a non-empty list")}
+  end
+
+  defp validate_onboarding_completion(user, false), do: {:ok, user}
+
+  defp validate_onboarding_completion(user, true) do
+    []
+    |> maybe_add_required_error(:location, is_nil(user.location))
+    |> maybe_add_required_error(:interests, Enum.empty?(user.user_interests))
+    |> case do
+      [] -> {:ok, user}
+      errors -> {:error, changeset_errors(errors)}
+    end
+  end
+
+  defp maybe_add_required_error(errors, _field, false), do: errors
+  defp maybe_add_required_error(errors, field, true), do: [{field, "is required"} | errors]
+
+  defp changeset_error(field, message), do: changeset_errors([{field, message}])
+
+  defp changeset_errors(errors) do
+    Enum.reduce(errors, Ecto.Changeset.change(%User{}), fn {field, message}, changeset ->
+      Ecto.Changeset.add_error(changeset, field, message)
+    end)
+  end
+
+  defp stringify_keys(attrs) when is_map(attrs) do
+    Map.new(attrs, fn
+      {key, value} when is_atom(key) -> {Atom.to_string(key), value}
+      {key, value} -> {key, value}
+    end)
   end
 
   ## Settings
